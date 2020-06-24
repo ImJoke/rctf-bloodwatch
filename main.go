@@ -145,7 +145,7 @@ func (w *Watcher) notify(chall string, solver string) {
 	solverProfileURL := w.rctfClient.url.ResolveReference(profileRelURL)
 	payload := DiscordWebhookPayload{
 		Content: fmt.Sprintf(
-			"Congratulations to [%s](%s) for first :drop_of_blood: on %s!",
+			"Congratulations to [%s](<%s>) for first :drop_of_blood: on %s!",
 			solverName, solverProfileURL.String(), chall,
 		),
 	}
