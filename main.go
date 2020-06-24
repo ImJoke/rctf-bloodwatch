@@ -15,6 +15,8 @@ import (
 	"github.com/spf13/pflag"
 )
 
+const MaxInflightReqs = 10
+
 type RctfClient struct {
 	url url.URL
 }
@@ -84,17 +86,24 @@ func NewWatcher(options WatcherOptions) Watcher {
 
 	wg := sync.WaitGroup{}
 	m := sync.Mutex{}
-	for _, chall := range options.Challenges {
-		wg.Add(1)
-		go func(chall string) {
-			if client.ChallGetBlooder(chall) == "" {
-				m.Lock()
-				defer m.Unlock()
-				unsolvedChallenges[chall] = struct{}{}
+	cc := make(chan string)
+	for i := 0; i < MaxInflightReqs; i++ {
+		go func() {
+			wg.Add(1)
+			defer wg.Done()
+			for chall := range cc {
+				if client.ChallGetBlooder(chall) == "" {
+					m.Lock()
+					unsolvedChallenges[chall] = struct{}{}
+					m.Unlock()
+				}
 			}
-			wg.Done()
-		}(chall)
+		}()
 	}
+	for _, chall := range options.Challenges {
+		cc <- chall
+	}
+	close(cc)
 	wg.Wait()
 
 	return Watcher{
@@ -159,19 +168,26 @@ func (w *Watcher) notify(chall string, solver string) {
 func (w *Watcher) Check() {
 	wg := sync.WaitGroup{}
 	m := sync.Mutex{}
-	for c := range w.unsolvedChallenges {
-		wg.Add(1)
-		go func(chall string) {
-			blooder := w.rctfClient.ChallGetBlooder(chall)
-			if blooder != "" {
-				m.Lock()
-				defer m.Unlock()
-				delete(w.unsolvedChallenges, chall)
-				go w.notify(chall, blooder)
+	cc := make(chan string)
+	for i := 0; i < MaxInflightReqs; i++ {
+		go func() {
+			wg.Add(1)
+			defer wg.Done()
+			for chall := range cc {
+				blooder := w.rctfClient.ChallGetBlooder(chall)
+				if blooder != "" {
+					m.Lock()
+					delete(w.unsolvedChallenges, chall)
+					m.Unlock()
+					go w.notify(chall, blooder)
+				}
 			}
-			wg.Done()
-		}(c)
+		}()
 	}
+	for chall := range w.unsolvedChallenges {
+		cc <- chall
+	}
+	close(cc)
 	wg.Wait()
 }
 
@@ -202,6 +218,8 @@ func main() {
 		Challenges:     challenges,
 		DiscordWebhook: *discordWebhook,
 	})
+
+	logrus.Info("Startup complete")
 
 	for {
 		time.Sleep(interval)
