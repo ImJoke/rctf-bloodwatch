@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -141,6 +142,10 @@ func (c *RctfClient) GetChalls() []Challenge {
 	}
 	var resp respGoodChallenges
 	if err := parseResponse(r, "goodChallenges", &resp); err != nil {
+		var respErr *responseError
+		if errors.As(err, &respErr) && respErr.Kind == "badNotStarted" {
+			return []Challenge{}
+		}
 		panic(err)
 	}
 	return resp
