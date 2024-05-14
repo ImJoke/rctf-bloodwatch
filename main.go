@@ -82,13 +82,13 @@ func parseResponse(resp *http.Response, expectedKind string, data interface{}) e
 func (c *RctfClient) Login(token string) error {
 	epURL, err := url.Parse("api/v1/auth/login")
 	if err != nil {
-		panic(err)
+		logrus.Fatal(err)
 	}
 	reqBody, err := json.Marshal(reqAuthLoginBody{
 		TeamToken: token,
 	})
 	if err != nil {
-		panic(err)
+		logrus.Fatal(err)
 	}
 	r, err := http.Post(c.url.ResolveReference(epURL).String(), "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
@@ -105,15 +105,20 @@ func (c *RctfClient) Login(token string) error {
 func (c *RctfClient) ChallGetBlooder(id string) userInfo {
 	epURL, err := url.Parse(fmt.Sprintf("api/v1/challs/%s/solves?limit=1&offset=0", url.QueryEscape(id)))
 	if err != nil {
-		panic(err)
+		logrus.Fatal(err)
 	}
-	r, err := http.Get(c.url.ResolveReference(epURL).String())
+	req, err := http.NewRequest("GET", c.url.ResolveReference(epURL).String(), nil)
 	if err != nil {
-		panic(err)
+		logrus.Fatal(err)
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		logrus.Fatal(err)
 	}
 	var resp respGoodChallengeSolves
 	if err := parseResponse(r, "goodChallengeSolves", &resp); err != nil {
-		panic(err)
+		logrus.Fatal(err)
 	}
 	solves := resp.Solves
 	if len(solves) > 0 {
@@ -129,16 +134,16 @@ func (c *RctfClient) ChallGetBlooder(id string) userInfo {
 func (c *RctfClient) GetChalls() []Challenge {
 	epURL, err := url.Parse("api/v1/challs")
 	if err != nil {
-		panic(err)
+		logrus.Fatal(err)
 	}
 	req, err := http.NewRequest("GET", c.url.ResolveReference(epURL).String(), nil)
 	if err != nil {
-		panic(err)
+		logrus.Fatal(err)
 	}
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
 	r, err := http.DefaultClient.Do(req)
 	if err != nil {
-		panic(err)
+		logrus.Fatal(err)
 	}
 	var resp respGoodChallenges
 	if err := parseResponse(r, "goodChallenges", &resp); err != nil {
@@ -146,7 +151,7 @@ func (c *RctfClient) GetChalls() []Challenge {
 		if errors.As(err, &respErr) && respErr.Kind == "badNotStarted" {
 			return []Challenge{}
 		}
-		panic(err)
+		logrus.Fatal(err)
 	}
 	return resp
 }
@@ -161,18 +166,21 @@ type Watcher struct {
 	rctfClient       RctfClient
 	solvedChallenges map[string]struct{}
 	discordWebhook   string
+	botUsername      string
 }
 
-func NewWatcher(options WatcherOptions) Watcher {
+func NewWatcher(options WatcherOptions, botUsername string) Watcher {
 	url, err := url.Parse(options.RctfURL)
 	if err != nil {
-		panic(err)
+		logrus.Fatal(err)
 	}
 
 	client := RctfClient{
 		url: *url,
 	}
-	client.Login(options.Token)
+	if err := client.Login(options.Token); err != nil {
+		logrus.Fatal(err)
+	}
 
 	solvedChallenges := make(map[string]struct{})
 
@@ -187,6 +195,7 @@ func NewWatcher(options WatcherOptions) Watcher {
 		rctfClient:       client,
 		solvedChallenges: solvedChallenges,
 		discordWebhook:   options.DiscordWebhook,
+		botUsername:      botUsername,
 	}
 }
 
@@ -237,7 +246,7 @@ func (w *Watcher) notify(chall Challenge) {
 	solver := w.rctfClient.ChallGetBlooder(chall.ID)
 	profileRelURL, err := url.Parse(fmt.Sprintf("profile/%s", solver.ID))
 	if err != nil {
-		panic(err)
+		logrus.Fatal(err)
 	}
 	solverProfileURL := w.rctfClient.url.ResolveReference(profileRelURL)
 	payload := DiscordWebhookPayload{
@@ -248,12 +257,16 @@ func (w *Watcher) notify(chall Challenge) {
 		AllowedMentions: DiscordWebhookPayloadAllowedMentions{
 			Parse: []string{},
 		},
+		Username: w.botUsername,
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		panic(err)
+		logrus.Fatal(err)
 	}
-	http.Post(w.discordWebhook, "application/json", bytes.NewBuffer(payloadBytes))
+	_, err = http.Post(w.discordWebhook, "application/json", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		logrus.Fatal(err)
+	}
 }
 
 func (w *Watcher) Check() {
@@ -273,29 +286,33 @@ func main() {
 	token := pflag.String("token", os.Getenv("RCTF_TOKEN"), "rCTF token to fetch challenges with")
 	discordWebhook := pflag.String("discord-webhook", os.Getenv("DISCORD_WEBHOOK"), "discord webhook to post to")
 	intervalStr := pflag.String("interval", "1m", "interval to check")
+	botUsername := pflag.String("bot-name", "Bot", "discord bot username")
 
 	pflag.Parse()
 
 	if *rctfURL == "" {
-		panic("--rctf-url is required")
+		logrus.Fatal("--rctf-url is required")
 	}
 	if *token == "" {
-		panic("--token is required")
+		logrus.Fatal("--token is required")
 	}
 	if *discordWebhook == "" {
-		panic("--discord-webhook is required")
+		logrus.Fatal("--discord-webhook is required")
+	}
+	if *botUsername == "" {
+		logrus.Fatal("--bot-name is required")
 	}
 
 	interval, err := time.ParseDuration(*intervalStr)
 	if err != nil {
-		panic(err)
+		logrus.Fatal(err)
 	}
 
 	watcher := NewWatcher(WatcherOptions{
 		RctfURL:        *rctfURL,
 		Token:          *token,
 		DiscordWebhook: *discordWebhook,
-	})
+	}, *botUsername)
 
 	logrus.Info("Startup complete")
 
